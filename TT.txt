@@ -1,5 +1,6 @@
 Get-WmiObject Win32_Process | Where-Object {$_.Name -eq "powershell.exe"} | Select-Object ProcessId, CommandLine
 
+([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
 
 $password = ConvertTo-SecureString "Hdflab1234!" -AsPlainText -Force
 
