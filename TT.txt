@@ -1,3 +1,6 @@
+New-ADUser -SamAccountName "dbadmin" -Name "DB Admin" -AccountPassword (ConvertTo-SecureString "DBadmin1234!" -AsPlainText -Force) -Enabled $true
+
+
 New-ADUser -SamAccountName "john.doe" -Name "John Doe" -AccountPassword (ConvertTo-SecureString "John1283!@#" -AsPlainText -Force) -Enabled $true
 
 
