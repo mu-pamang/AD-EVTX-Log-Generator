@@ -1,3 +1,6 @@
+New-ADUser -SamAccountName "john.doe" -Name "John Doe" -AccountPassword (ConvertTo-SecureString "John1283!@#" -AsPlainText -Force) -Enabled $true
+
+
 Set-Date -Date "2026-05-22 17:30:00"
 
 cd C:\Users\Administrator\Downloads
