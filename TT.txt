@@ -2,6 +2,12 @@ Get-WmiObject Win32_Process | Where-Object {$_.Name -eq "powershell.exe"} | Sele
 
 ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
 
+
+$test = Get-Date -Year 2026 -Month 5 -Day 14 -Hour 9 -Minute 0 -Second 0
+Write-Host $test
+Set-Date -Date $test
+Get-Date
+
 $password = ConvertTo-SecureString "Hdflab1234!" -AsPlainText -Force
 
 $users = @("kim.jungwoo","lee.minjun","park.sooyeon","choi.jinha","jung.hyunwoo","han.seoyeon","yoon.jihoon","lim.chaewon","oh.jisoo","kwon.minjae","shin.yuna","bae.jungho","nam.soojin","hong.gilyong","kang.jiwon","svc_backup","svc_monitor","svc_deploy","admin_temp","helpdesk01")
