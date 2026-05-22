@@ -1,3 +1,12 @@
+Set-Date -Date "2026-05-22 17:30:00"
+
+cd C:\Users\Administrator\Downloads
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\Generate-EventLogs-v9.ps1
+
+
+
+
 Get-WmiObject Win32_Process | Where-Object {$_.Name -eq "powershell.exe"} | Select-Object ProcessId, CommandLine
 
 ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
