@@ -1,1 +1,11 @@
 Get-WmiObject Win32_Process | Where-Object {$_.Name -eq "powershell.exe"} | Select-Object ProcessId, CommandLine
+
+
+$password = ConvertTo-SecureString "Hdflab1234!" -AsPlainText -Force
+
+$users = @("kim.jungwoo","lee.minjun","park.sooyeon","choi.jinha","jung.hyunwoo","han.seoyeon","yoon.jihoon","lim.chaewon","oh.jisoo","kwon.minjae","shin.yuna","bae.jungho","nam.soojin","hong.gilyong","kang.jiwon","svc_backup","svc_monitor","svc_deploy","admin_temp","helpdesk01")
+
+foreach ($user in $users) {
+    New-ADUser -SamAccountName $user -Name $user -AccountPassword $password -Enabled $true -ErrorAction SilentlyContinue
+    Write-Host "Created: $user"
+}
