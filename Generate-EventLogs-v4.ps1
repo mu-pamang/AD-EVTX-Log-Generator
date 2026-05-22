@@ -8,7 +8,7 @@ $START_DATE  = $ATTACK_DATE.AddDays(-$DAYS_BEFORE)
 $REAL_TIME   = Get-Date
 
 $SERVICE_ACCOUNTS = @("svc_backup","svc_monitor","svc_deploy","admin_temp","helpdesk01")
-$NORMAL_USERS     = @("kim.jungwoo","lee.minjun","park.sooyeon","choi.jinha","jung.hyunwoo","han.seoyeon","yoon.jihoon","lim.chaewon")
+$NORMAL_USERS = @("kim.jungwoo","lee.minjun","Doe.John","park.sooyeon","choi.jinha","jung.hyunwoo","han.seoyeon","yoon.jihoon","lim.chaewon","oh.jisoo","kwon.minjae","shin.yuna","bae.jungho","nam.soojin","hong.gilyong","kang.jiwon")
 
 function Invoke-NormalADQuery { param([string]$User)
     try { Get-ADUser -Identity $User -Properties * | Out-Null } catch {}
