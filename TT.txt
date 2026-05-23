@@ -1,3 +1,29 @@
+# 시스템 시간 변경 권한 부여
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+public class TokenPrivilege {
+    [DllImport("advapi32.dll")] public static extern bool AdjustTokenPrivileges(IntPtr h, bool d, ref TOKEN_PRIVILEGES n, int b, IntPtr p, IntPtr r);
+    [DllImport("advapi32.dll")] public static extern bool OpenProcessToken(IntPtr h, int a, ref IntPtr t);
+    [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
+    [StructLayout(LayoutKind.Sequential)] public struct TOKEN_PRIVILEGES { public int Count; public long Luid; public int Attr; }
+    public static void Enable() {
+        IntPtr token = IntPtr.Zero;
+        OpenProcessToken(GetCurrentProcess(), 0x28, ref token);
+        TOKEN_PRIVILEGES tp = new TOKEN_PRIVILEGES();
+        tp.Count = 1; tp.Luid = 0x0000000000000019L; tp.Attr = 0x00000002;
+        AdjustTokenPrivileges(token, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+    }
+}
+"@
+Add-Type -TypeDefinition $code
+[TokenPrivilege]::Enable()
+
+
+
+
+
+
 # 1. 현재 파일 내용 읽기
 $content = Get-Content "$env:USERPROFILE\Downloads\Generate-user-EventLogs.ps1" -Raw
 
