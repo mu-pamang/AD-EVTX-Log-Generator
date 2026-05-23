@@ -1,4 +1,4 @@
-# Windows Event Log Generator - WIN10-CLIENT v9
+# Windows Event Log Generator - WIN10-CLIENT v9 Final
 # Scenario: New employee PC recently provisioned
 
 $REAL_TIME   = Get-Date
@@ -69,16 +69,18 @@ function Invoke-NormalLogon {
     net use \\DC01\IPC$ /delete 2>$null
 }
 
-# Normal: runas style logon 4624 Type2 + 4634
+# [추가] Normal: 4624 Type2 + 4634 - Start-Process runas style
 function Invoke-NormalLogonLogoff {
-    $cred = New-Object System.Management.Automation.PSCredential(
-        "CORP\jdoe",
-        (ConvertTo-SecureString "qwer1234!" -AsPlainText -Force)
-    )
+    # Start-Process with credential triggers 4624 Type2 on local session
+    $secPwd = ConvertTo-SecureString "qwer1234!" -AsPlainText -Force
+    $cred = New-Object System.Management.Automation.PSCredential("CORP\jdoe", $secPwd)
     try {
-        $job = Start-Job -ScriptBlock { Get-ChildItem "\\DC01\SYSVOL" } -Credential $cred
-        Wait-Job $job -Timeout 10 | Out-Null
-        Remove-Job $job -Force | Out-Null
+        $proc = Start-Process "cmd.exe" -ArgumentList "/c whoami" `
+            -Credential $cred -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
+        if ($proc) {
+            Start-Sleep -Seconds 2
+            $proc.CloseMainWindow() | Out-Null
+        }
     } catch {}
 }
 
@@ -105,16 +107,22 @@ function Invoke-FalsePositive_AuthFail {
     net use \\DC01\IPC$ /delete 2>$null
 }
 
-# False Positive 3: Windows Update pattern (System log + odd hour activity)
+# [추가] False Positive 3: Windows Update pattern
 function Invoke-FalsePositive_WindowsUpdate {
     Write-Host "  [FP] Windows Update pattern..."
-    # Trigger WU check to generate System/Application log entries
+    # COM object triggers real WU search activity in System log
     try {
         $wu = New-Object -ComObject Microsoft.Update.Session
         $searcher = $wu.CreateUpdateSearcher()
         $searcher.BeginSearch("IsInstalled=0", $null, $null) | Out-Null
     } catch {}
-    # Also write to Application log to simulate WU activity
+    # Write to Application log to simulate WU install event EID 19
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\Windows Update"
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+        New-ItemProperty -Path $regPath -Name "EventMessageFile" `
+            -Value "C:\Windows\System32\wevtapi.dll" -Force | Out-Null
+    }
     Write-EventLog -LogName Application -Source "Windows Update" `
         -EventId 19 -EntryType Information `
         -Message "Installation Successful: Windows successfully installed the following update: KB5034441" `
@@ -122,7 +130,7 @@ function Invoke-FalsePositive_WindowsUpdate {
 }
 
 Write-Host "======================================"
-Write-Host " Event Log Generator - WIN10-CLIENT v9"
+Write-Host " Event Log Generator - WIN10-CLIENT v9 Final"
 Write-Host " Period: $($START_DATE.ToString('MM/dd')) ~ $($ATTACK_DATE.AddDays(-1).ToString('MM/dd'))"
 Write-Host " Scenario: New employee PC (recently provisioned)"
 Write-Host "======================================"
@@ -169,12 +177,13 @@ for ($day = 0; $day -lt $DAYS_BEFORE; $day++) {
     # Auth failure (multiples of 3)
     if ($current_date.Day % 3 -eq 0) { Invoke-FalsePositive_AuthFail }
 
-    # Windows Update (last 2 days of period)
+    # Windows Update (last 3 days of period)
     if ($day -ge ($DAYS_BEFORE - 3)) { Invoke-FalsePositive_WindowsUpdate }
 
     Write-Host "  Done: $count actions"
 }
 
+# [3] Cleanup
 Write-Host "`n[3] Cleaning up traces..."
 
 $dl = "$env:USERPROFILE\Downloads"
