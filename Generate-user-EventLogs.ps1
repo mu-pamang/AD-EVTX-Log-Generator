@@ -1,14 +1,33 @@
-# WIN10-CLIENT Normal + False Positive Log Generation Script v4
-# Audit policy uses GUIDs for Korean Windows compatibility
+# WIN10-CLIENT Log Generation Script v5
+# Audit policy via registry (no auditpol subcategory)
 
-# Audit Policy Activation using GUIDs (works on Korean Windows)
-auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable
-auditpol /set /subcategory:"{0CCE9216-69AE-11D9-BED3-505054503030}" /success:enable
-auditpol /set /subcategory:"{0CCE921D-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable
-auditpol /set /subcategory:"{0CCE9244-69AE-11D9-BED3-505054503030}" /success:enable
-auditpol /set /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030}" /success:enable
+# Enable audit policy via registry
+$auditKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
+Set-ItemProperty -Path $auditKey -Name "SCENoApplyLegacyAuditPolicy" -Value 0 -ErrorAction SilentlyContinue
 
-Write-Host "[+] Audit policy activated"
+$polKey = "HKLM:\SECURITY\Policy\PolAdtEv"
+# Use secedit instead
+$seceditCfg = @"
+[Unicode]
+Unicode=yes
+[Version]
+signature="`$CHICAGO`$"
+Revision=1
+[Event Audit]
+AuditSystemEvents=0
+AuditLogonEvents=3
+AuditObjectAccess=3
+AuditPrivilegeUse=0
+AuditPolicyChange=0
+AuditAccountManage=0
+AuditProcessTracking=1
+AuditDSAccess=0
+AuditAccountLogon=3
+"@
+$cfgPath = "$env:TEMP\audit.cfg"
+$seceditCfg | Set-Content $cfgPath -Encoding Unicode
+secedit /configure /db "$env:TEMP\audit.sdb" /cfg $cfgPath /quiet 2>$null
+Write-Host "[+] Audit policy configured via secedit"
 
 # Scan actual files
 $userProfile = $env:USERPROFILE
@@ -21,7 +40,6 @@ foreach ($p in $scanPaths) {
     }
 }
 
-# Fallback if not enough files
 if ($discoveredFiles.Count -lt 5) {
     $basePath = "$userProfile\Documents"
     @("Q1_report.xlsx","budget_2024.xlsx","meeting_notes.docx","project_plan.docx","HR_list.xlsx","client_contact.xlsx") | ForEach-Object {
@@ -95,7 +113,7 @@ while ($current -le $endDate) {
         $total++
     }
 
-    # False Positive: AV scan 4663 burst at 02:30 (even days, 100 events)
+    # False Positive: AV scan 4663 burst at 02:30 (even days)
     if ($current.Day % 2 -eq 0) {
         $tsBase = $current.AddHours(2).AddMinutes(30)
         for ($f = 1; $f -le 100; $f++) {
@@ -108,7 +126,7 @@ while ($current -le $endDate) {
         Write-Host "  [+] AV scan false positive: 100 events"
     }
 
-    # False Positive: Auth failure 4625 at 08:50 (multiples of 3, 20 events)
+    # False Positive: Auth failure 4625 at 08:50 (multiples of 3)
     if ($current.Day % 3 -eq 0) {
         $tsBase = $current.AddHours(8).AddMinutes(50)
         for ($a = 1; $a -le 20; $a++) {
