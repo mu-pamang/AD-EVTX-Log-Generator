@@ -1,3 +1,20 @@
+# 1. 현재 파일 내용 읽기
+$content = Get-Content "$env:USERPROFILE\Downloads\Generate-user-EventLogs.ps1" -Raw
+
+# 2. UTF-8 BOM으로 다시 저장
+$utf8Bom = New-Object System.Text.UTF8Encoding $true
+[System.IO.File]::WriteAllText(
+    "$env:USERPROFILE\Downloads\Generate-user-EventLogs.ps1",
+    $content,
+    $utf8Bom
+)
+
+# 3. 다시 실행
+.\Generate-user-EventLogs.ps1
+
+
+
+
 Set-ADAccountPassword -Identity "dbadmin" `
   -NewPassword (ConvertTo-SecureString "Dbhspace1!" -AsPlainText -Force) `
   -Reset
