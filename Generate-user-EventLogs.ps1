@@ -1,10 +1,35 @@
-# Windows Event Log Generator - WIN10-CLIENT v8
-# Uses Task Scheduler with SYSTEM account to bypass SeSystemtimePrivilege
+# Windows Event Log Generator - WIN10-CLIENT v9
+# Scenario: New employee PC recently provisioned
 
 $REAL_TIME   = Get-Date
 $DAYS_BEFORE = 8
 $ATTACK_DATE = [datetime]"2026-05-22"
 $START_DATE  = $ATTACK_DATE.AddDays(-$DAYS_BEFORE)
+
+# [0] Audit policy via secedit (Korean Windows compatible)
+$seceditCfg = @"
+[Unicode]
+Unicode=yes
+[Version]
+signature="`$CHICAGO`$"
+Revision=1
+[Event Audit]
+AuditSystemEvents=0
+AuditLogonEvents=3
+AuditObjectAccess=3
+AuditPrivilegeUse=0
+AuditPolicyChange=0
+AuditAccountManage=0
+AuditProcessTracking=1
+AuditDSAccess=0
+AuditAccountLogon=3
+"@
+$cfgPath = "$env:TEMP\audit.cfg"
+$seceditCfg | Set-Content $cfgPath -Encoding Unicode
+secedit /configure /db "$env:TEMP\audit.sdb" /cfg $cfgPath /quiet 2>$null
+Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:TEMP\audit.sdb" -Force -ErrorAction SilentlyContinue
+Write-Host "[+] Audit policy configured"
 
 # Scan actual files
 $userProfile = $env:USERPROFILE
@@ -23,83 +48,83 @@ if ($discoveredFiles.Count -lt 5) {
     }
     $discoveredFiles = Get-ChildItem $basePath -Recurse -File
 }
+Write-Host "[+] Found $($discoveredFiles.Count) files"
 
-# Build file list string for inner script
-$fileListStr = ($discoveredFiles.FullName | ForEach-Object { "`"$_`"" }) -join ","
-
-# Write inner worker script (runs as SYSTEM via Task Scheduler)
-$workerPath = "$env:TEMP\log_worker.ps1"
-@"
-param([string]`$DateStr)
-`$targetDate = [datetime]`$DateStr
-
-# Set system time
-Set-Date -Date `$targetDate.Date.AddHours(9) | Out-Null
-
-`$files = @($fileListStr)
-
+# Normal: File access 4663
 function Invoke-NormalFileAccess {
-    `$f = `$files | Get-Random
-    if (Test-Path `$f) { Get-Content `$f -ErrorAction SilentlyContinue | Out-Null }
+    $f = ($discoveredFiles | Get-Random).FullName
+    if (Test-Path $f) { Get-Content $f -ErrorAction SilentlyContinue | Out-Null }
 }
+
+# Normal: Network share 5140
 function Invoke-NormalNetworkAccess {
-    foreach (`$share in @("\\DC01\SYSVOL","\\DC01\NETLOGON")) {
-        try { Get-ChildItem `$share -ErrorAction SilentlyContinue | Out-Null } catch {}
+    foreach ($share in @("\\DC01\SYSVOL","\\DC01\NETLOGON")) {
+        try { Get-ChildItem $share -ErrorAction SilentlyContinue | Out-Null } catch {}
     }
 }
+
+# Normal: Explicit credential 4648 + 5140
 function Invoke-NormalLogon {
-    net use \\DC01\IPC$ /user:CORP\jdoe "qwer1234!" 2>`$null
-    net use \\DC01\IPC$ /delete 2>`$null
+    net use \\DC01\IPC$ /user:CORP\jdoe "qwer1234!" 2>$null
+    net use \\DC01\IPC$ /delete 2>$null
 }
+
+# Normal: runas style logon 4624 Type2 + 4634
+function Invoke-NormalLogonLogoff {
+    $cred = New-Object System.Management.Automation.PSCredential(
+        "CORP\jdoe",
+        (ConvertTo-SecureString "qwer1234!" -AsPlainText -Force)
+    )
+    try {
+        $job = Start-Job -ScriptBlock { Get-ChildItem "\\DC01\SYSVOL" } -Credential $cred
+        Wait-Job $job -Timeout 10 | Out-Null
+        Remove-Job $job -Force | Out-Null
+    } catch {}
+}
+
+# False Positive 1: AV scan - large file access burst 4663
 function Invoke-FalsePositive_AVScan {
-    `$paths = @("`$env:USERPROFILE\Documents","`$env:USERPROFILE\Desktop")
-    foreach (`$p in `$paths) {
-        if (Test-Path `$p) {
-            Get-ChildItem `$p -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-                try { [System.IO.File]::ReadAllBytes(`$_.FullName) | Out-Null } catch {}
+    Write-Host "  [FP] AV scan pattern..."
+    foreach ($p in @("$userProfile\Documents","$userProfile\Desktop")) {
+        if (Test-Path $p) {
+            Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                try { [System.IO.File]::ReadAllBytes($_.FullName) | Out-Null } catch {}
                 Start-Sleep -Milliseconds 30
             }
         }
     }
 }
+
+# False Positive 2: Auth failure 4625 burst
 function Invoke-FalsePositive_AuthFail {
-    for (`$i = 1; `$i -le 20; `$i++) {
-        net use \\DC01\IPC$ /user:CORP\jdoe "wrongpassword`$i" 2>`$null
+    Write-Host "  [FP] Auth failure pattern..."
+    for ($i = 1; $i -le 20; $i++) {
+        net use \\DC01\IPC$ /user:CORP\jdoe "wrongpassword$i" 2>$null
         Start-Sleep -Milliseconds (Get-Random -Minimum 200 -Maximum 800)
     }
-    net use \\DC01\IPC$ /delete 2>`$null
+    net use \\DC01\IPC$ /delete 2>$null
 }
 
-`$count  = 0
-`$target = Get-Random -Minimum 300 -Maximum 400
-while (`$count -lt `$target) {
-    `$current_time = (Get-Date).AddSeconds((Get-Random -Minimum 30 -Maximum 180))
-    Set-Date -Date `$current_time | Out-Null
-    if ((Get-Date).Hour -ge 18) { break }
-    `$action = Get-Random -Minimum 1 -Maximum 4
-    switch (`$action) {
-        1 { Invoke-NormalFileAccess }
-        2 { Invoke-NormalNetworkAccess }
-        3 { Invoke-NormalLogon }
-        4 { Invoke-NormalFileAccess; Invoke-NormalFileAccess }
-    }
-    `$count++
-    Start-Sleep -Milliseconds (Get-Random -Minimum 30 -Maximum 100)
+# False Positive 3: Windows Update pattern (System log + odd hour activity)
+function Invoke-FalsePositive_WindowsUpdate {
+    Write-Host "  [FP] Windows Update pattern..."
+    # Trigger WU check to generate System/Application log entries
+    try {
+        $wu = New-Object -ComObject Microsoft.Update.Session
+        $searcher = $wu.CreateUpdateSearcher()
+        $searcher.BeginSearch("IsInstalled=0", $null, $null) | Out-Null
+    } catch {}
+    # Also write to Application log to simulate WU activity
+    Write-EventLog -LogName Application -Source "Windows Update" `
+        -EventId 19 -EntryType Information `
+        -Message "Installation Successful: Windows successfully installed the following update: KB5034441" `
+        -ErrorAction SilentlyContinue
 }
-
-if (`$targetDate.Day % 2 -eq 0) {
-    Set-Date -Date `$targetDate.Date.AddHours(2).AddMinutes(30) | Out-Null
-    Invoke-FalsePositive_AVScan
-}
-if (`$targetDate.Day % 3 -eq 0) {
-    Set-Date -Date `$targetDate.Date.AddHours(8).AddMinutes(50) | Out-Null
-    Invoke-FalsePositive_AuthFail
-}
-"@ | Set-Content $workerPath -Encoding UTF8
 
 Write-Host "======================================"
-Write-Host " Event Log Generator - WIN10-CLIENT v8"
+Write-Host " Event Log Generator - WIN10-CLIENT v9"
 Write-Host " Period: $($START_DATE.ToString('MM/dd')) ~ $($ATTACK_DATE.AddDays(-1).ToString('MM/dd'))"
+Write-Host " Scenario: New employee PC (recently provisioned)"
 Write-Host "======================================"
 
 # [1] Clear logs
@@ -109,8 +134,8 @@ wevtutil cl System      2>$null
 wevtutil cl Application 2>$null
 Write-Host "  Done"
 
-# [2] Run worker via Task Scheduler as SYSTEM for each day
-Write-Host "`n[2] Generating logs by date via SYSTEM task..."
+# [2] Generate logs (8 rounds)
+Write-Host "`n[2] Generating logs (8 rounds)..."
 
 for ($day = 0; $day -lt $DAYS_BEFORE; $day++) {
     $current_date = $START_DATE.AddDays($day)
@@ -120,48 +145,37 @@ for ($day = 0; $day -lt $DAYS_BEFORE; $day++) {
         continue
     }
 
-    Write-Host "`n  [$($day+1)/$DAYS_BEFORE] $($current_date.ToString('yyyy-MM-dd')) generating..."
+    Write-Host "`n  [$($day+1)/$DAYS_BEFORE] Simulating $($current_date.ToString('yyyy-MM-dd'))..."
 
-    $taskName = "LogGen_$day"
-    $dateArg  = $current_date.ToString('yyyy-MM-dd')
+    $count  = 0
+    $target = Get-Random -Minimum 300 -Maximum 400
 
-    # Register task to run as SYSTEM
-    $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
-                   -Argument "-NonInteractive -ExecutionPolicy Bypass -File `"$workerPath`" -DateStr $dateArg"
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-        -RunLevel Highest -User "SYSTEM" -Settings $settings -Force | Out-Null
+    while ($count -lt $target) {
+        $action = Get-Random -Minimum 1 -Maximum 5
+        switch ($action) {
+            1 { Invoke-NormalFileAccess }
+            2 { Invoke-NormalNetworkAccess }
+            3 { Invoke-NormalLogon }
+            4 { Invoke-NormalFileAccess; Invoke-NormalFileAccess }
+            5 { Invoke-NormalLogonLogoff }
+        }
+        $count++
+        Start-Sleep -Milliseconds (Get-Random -Minimum 30 -Maximum 100)
+    }
 
-    # Run immediately
-    Start-ScheduledTask -TaskName $taskName
+    # AV scan (even days)
+    if ($current_date.Day % 2 -eq 0) { Invoke-FalsePositive_AVScan }
 
-    # Wait for completion
-    do {
-        Start-Sleep -Seconds 5
-        $state = (Get-ScheduledTask -TaskName $taskName).State
-    } while ($state -eq "Running")
+    # Auth failure (multiples of 3)
+    if ($current_date.Day % 3 -eq 0) { Invoke-FalsePositive_AuthFail }
 
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false | Out-Null
-    Write-Host "  Done"
+    # Windows Update (last 2 days of period)
+    if ($day -ge ($DAYS_BEFORE - 3)) { Invoke-FalsePositive_WindowsUpdate }
+
+    Write-Host "  Done: $count actions"
 }
 
-# [3] Restore system time
-Write-Host "`n[3] Restoring system time..."
-$restoreTask = "LogGen_Restore"
-$action  = New-ScheduledTaskAction -Execute "powershell.exe" `
-               -Argument "-NonInteractive -Command Set-Date -Date '$($REAL_TIME.ToString('yyyy-MM-dd HH:mm:ss'))'"
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-Register-ScheduledTask -TaskName $restoreTask -Action $action -Trigger $trigger `
-    -RunLevel Highest -User "SYSTEM" -Force | Out-Null
-Start-ScheduledTask -TaskName $restoreTask
-Start-Sleep -Seconds 5
-Unregister-ScheduledTask -TaskName $restoreTask -Confirm:$false | Out-Null
-Write-Host "  Restored: $($REAL_TIME.ToString('yyyy-MM-dd HH:mm:ss'))"
-
-# [4] Cleanup
-Write-Host "`n[4] Cleaning up traces..."
-Remove-Item $workerPath -Force -ErrorAction SilentlyContinue
+Write-Host "`n[3] Cleaning up traces..."
 
 $dl = "$env:USERPROFILE\Downloads"
 @("$dl\Generate-user-EventLogs.ps1","$dl\Generate-EventLogs-v4.ps1") | ForEach-Object {
