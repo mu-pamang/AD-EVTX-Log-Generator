@@ -1,12 +1,14 @@
-# WIN10-CLIENT Normal + False Positive Log Generation Script v3
-# Target: 2,000~3,000 events / Jan 14~21 distributed
+# WIN10-CLIENT Normal + False Positive Log Generation Script v4
+# Audit policy uses GUIDs for Korean Windows compatibility
 
-# Audit Policy Activation
-auditpol /set /subcategory:"Logon" /success:enable /failure:enable
-auditpol /set /subcategory:"Logoff" /success:enable
-auditpol /set /subcategory:"File System" /success:enable /failure:enable
-auditpol /set /subcategory:"Detailed File Share" /success:enable
-auditpol /set /subcategory:"Process Creation" /success:enable
+# Audit Policy Activation using GUIDs (works on Korean Windows)
+auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable
+auditpol /set /subcategory:"{0CCE9216-69AE-11D9-BED3-505054503030}" /success:enable
+auditpol /set /subcategory:"{0CCE921D-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable
+auditpol /set /subcategory:"{0CCE9244-69AE-11D9-BED3-505054503030}" /success:enable
+auditpol /set /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030}" /success:enable
+
+Write-Host "[+] Audit policy activated"
 
 # Scan actual files
 $userProfile = $env:USERPROFILE
@@ -55,7 +57,7 @@ while ($current -le $endDate) {
 
     Write-Host "`n[*] Processing $($current.ToString('yyyy-MM-dd'))..."
 
-    # Normal: Logon 4624 + Logoff 4634 (2 per day)
+    # Normal: Logon 4624 + Logoff 4634
     foreach ($loginHour in @(9, 18)) {
         $ts = $current.AddHours($loginHour).AddMinutes((Get-Random -Minimum 0 -Maximum 15))
         $eid = if ($loginHour -eq 9) { 4624 } else { 4634 }
