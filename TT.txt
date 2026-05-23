@@ -1,3 +1,14 @@
+# 로컬 보안 정책에서 시간 변경 권한 부여
+secedit /export /cfg "$env:TEMP\sec.cfg" /quiet
+$cfg = Get-Content "$env:TEMP\sec.cfg"
+$cfg = $cfg -replace "SeSystemtimePrivilege.*", "SeSystemtimePrivilege = *S-1-5-32-544,*S-1-5-19"
+$cfg | Set-Content "$env:TEMP\sec.cfg" -Encoding Unicode
+secedit /configure /db "$env:TEMP\sec.sdb" /cfg "$env:TEMP\sec.cfg" /quiet
+gpupdate /force
+
+
+
+
 # 시스템 시간 변경 권한 부여
 $code = @"
 using System;
