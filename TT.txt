@@ -1,3 +1,12 @@
+Set-ADAccountPassword -Identity "dbadmin" `
+  -NewPassword (ConvertTo-SecureString "Dbhspace1!" -AsPlainText -Force) `
+  -Reset
+
+Enable-ADAccount -Identity "dbadmin"
+
+
+
+
 New-ADUser -SamAccountName "dbadmin" -Name "DB Admin" -AccountPassword (ConvertTo-SecureString "DBadmin1234!" -AsPlainText -Force) -Enabled $true
 
 
