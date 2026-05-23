@@ -1,4 +1,10 @@
-# WIN10-CLIENT Log Generation Script v6
+# Windows Event Log Generator - WIN10-CLIENT v6
+# Run as Administrator
+
+$DAYS_BEFORE = 8
+$ATTACK_DATE = [datetime]"2026-05-22"
+$START_DATE  = $ATTACK_DATE.AddDays(-$DAYS_BEFORE)
+$REAL_TIME   = Get-Date
 
 # Audit policy via secedit
 $seceditCfg = @"
@@ -23,12 +29,10 @@ $seceditCfg | Set-Content $cfgPath -Encoding Unicode
 secedit /configure /db "$env:TEMP\audit.sdb" /cfg $cfgPath /quiet 2>$null
 Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
 Remove-Item "$env:TEMP\audit.sdb" -Force -ErrorAction SilentlyContinue
-Write-Host "[+] Audit policy configured"
 
-# Scan actual files
+# Scan actual files (exclude this script)
 $userProfile = $env:USERPROFILE
 $scanPaths = @("$userProfile\Documents", "$userProfile\Desktop", "$userProfile\Downloads")
-
 $discoveredFiles = @()
 foreach ($p in $scanPaths) {
     if (Test-Path $p) {
@@ -36,7 +40,6 @@ foreach ($p in $scanPaths) {
             Where-Object { $_.FullName -notlike "*Generate-user-EventLogs*" }
     }
 }
-
 if ($discoveredFiles.Count -lt 5) {
     $basePath = "$userProfile\Documents"
     @("Q1_report.xlsx","budget_2024.xlsx","meeting_notes.docx","project_plan.docx","HR_list.xlsx","client_contact.xlsx") | ForEach-Object {
@@ -46,123 +49,148 @@ if ($discoveredFiles.Count -lt 5) {
 }
 Write-Host "[+] Found $($discoveredFiles.Count) files"
 
-# XML Event Injection Helper
-function Write-EventXml {
-    param($EventID, $TimeStamp, $Data)
-    $tsStr = $TimeStamp.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
-    $xml = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Microsoft-Windows-Security-Auditing'/><EventID>$EventID</EventID><TimeCreated SystemTime='$tsStr'/><Computer>WIN10-CLIENT</Computer></System><EventData>$Data</EventData></Event>"
-    $tmp = "$env:TEMP\evt_$(Get-Random).xml"
-    $xml | Set-Content $tmp -Encoding UTF8
-    wevtutil im $tmp 2>$null
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+# Normal actions
+function Invoke-NormalFileAccess {
+    $file = ($discoveredFiles | Get-Random).FullName
+    Get-Content $file -ErrorAction SilentlyContinue | Out-Null
+}
+function Invoke-NormalNetworkAccess {
+    foreach ($share in @("\\DC01\SYSVOL","\\DC01\NETLOGON")) {
+        try { Get-ChildItem $share -ErrorAction SilentlyContinue | Out-Null } catch {}
+    }
+}
+function Invoke-NormalLogon {
+    # net use triggers 4648 + 5140
+    net use \\DC01\IPC$ /user:CORP\jdoe "qwer1234!" 2>$null
+    net use \\DC01\IPC$ /delete 2>$null
 }
 
-# Date loop 2026-05-14 ~ 2026-05-22
-$startDate = [datetime]"2026-05-14"
-$endDate   = [datetime]"2026-05-22"
-$current   = $startDate
-$total     = 0
+# False positive actions
+function Invoke-FalsePositive_AVScan {
+    Write-Host "  [FP] AV scan pattern..."
+    foreach ($p in @("$userProfile\Documents","$userProfile\Desktop")) {
+        if (Test-Path $p) {
+            Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                try { [System.IO.File]::ReadAllBytes($_.FullName) | Out-Null } catch {}
+                Start-Sleep -Milliseconds 30
+            }
+        }
+    }
+}
+function Invoke-FalsePositive_AuthFail {
+    Write-Host "  [FP] Auth failure pattern..."
+    for ($i = 1; $i -le 20; $i++) {
+        net use \\DC01\IPC$ /user:CORP\jdoe "wrongpassword$i" 2>$null
+        Start-Sleep -Milliseconds (Get-Random -Minimum 500 -Maximum 2000)
+    }
+    net use \\DC01\IPC$ /delete 2>$null
+}
 
-while ($current -le $endDate) {
-    $dow = $current.DayOfWeek
+Write-Host "======================================"
+Write-Host " Event Log Generator - WIN10-CLIENT"
+Write-Host " Period: $($START_DATE.ToString('MM/dd')) ~ $($ATTACK_DATE.AddDays(-1).ToString('MM/dd'))"
+Write-Host "======================================"
+
+# [1] Clear existing logs
+Write-Host "`n[1] Clearing event logs..."
+wevtutil cl Security 2>$null
+wevtutil cl System   2>$null
+wevtutil cl Application 2>$null
+Write-Host "  Done"
+
+# [2] Generate logs by date
+Write-Host "`n[2] Generating logs by date..."
+
+for ($day = 0; $day -lt $DAYS_BEFORE; $day++) {
+    $current_date = $START_DATE.AddDays($day)
+    $dow = $current_date.DayOfWeek
     if ($dow -eq "Saturday" -or $dow -eq "Sunday") {
-        $current = $current.AddDays(1)
+        Write-Host "`n  [SKIP] $($current_date.ToString('yyyy-MM-dd')) weekend"
         continue
     }
 
-    Write-Host "`n[*] Processing $($current.ToString('yyyy-MM-dd'))..."
+    # Set system time to 09:00 of that day
+    $work_start = $current_date.Date.AddHours(9)
+    Set-Date -Date $work_start | Out-Null
+    Write-Host "`n  [$($day+1)/$DAYS_BEFORE] $($current_date.ToString('yyyy-MM-dd')) generating..."
 
-    # Normal: Logon 4624 + Logoff 4634
-    foreach ($loginHour in @(9, 18)) {
-        $ts = $current.AddHours($loginHour).AddMinutes((Get-Random -Minimum 0 -Maximum 15))
-        $eid = if ($loginHour -eq 9) { 4624 } else { 4634 }
-        $data = "<Data Name='TargetUserName'>jdoe</Data><Data Name='TargetDomainName'>CORP</Data><Data Name='LogonType'>2</Data><Data Name='IpAddress'>-</Data>"
-        Write-EventXml -EventID $eid -TimeStamp $ts -Data $data
-        $total++
-    }
+    $count  = 0
+    $target = Get-Random -Minimum 300 -Maximum 400
 
-    # Normal: File access 4663 (25 per hour x 8 hours)
-    $workHours = @(9,10,11,13,14,15,16,17)
-    foreach ($h in $workHours) {
-        for ($n = 1; $n -le 25; $n++) {
-            $ts   = $current.AddHours($h).AddMinutes((Get-Random -Minimum 0 -Maximum 59)).AddSeconds((Get-Random -Minimum 0 -Maximum 59))
-            $file = ($discoveredFiles | Get-Random).FullName
-            $data = "<Data Name='SubjectUserName'>jdoe</Data><Data Name='SubjectDomainName'>CORP</Data><Data Name='ObjectName'>$file</Data><Data Name='AccessMask'>0x1</Data>"
-            Write-EventXml -EventID 4663 -TimeStamp $ts -Data $data
-            $total++
+    while ($count -lt $target) {
+        # Advance time naturally
+        $current_time = (Get-Date).AddSeconds((Get-Random -Minimum 30 -Maximum 180))
+        Set-Date -Date $current_time | Out-Null
+
+        # Stop at 18:00
+        if ((Get-Date).Hour -ge 18) { break }
+
+        $action = Get-Random -Minimum 1 -Maximum 4
+        switch ($action) {
+            1 { Invoke-NormalFileAccess }
+            2 { Invoke-NormalNetworkAccess }
+            3 { Invoke-NormalLogon }
+            4 { Invoke-NormalFileAccess; Invoke-NormalFileAccess }
         }
+        $count++
+        Start-Sleep -Milliseconds (Get-Random -Minimum 50 -Maximum 150)
     }
 
-    # Normal: Network share 5140 (3 per day)
-    foreach ($shareHour in @(9, 13, 16)) {
-        $ts = $current.AddHours($shareHour).AddMinutes((Get-Random -Minimum 5 -Maximum 30))
-        $share = @("\\DC01\SYSVOL","\\DC01\NETLOGON") | Get-Random
-        $data = "<Data Name='SubjectUserName'>jdoe</Data><Data Name='SubjectDomainName'>CORP</Data><Data Name='ShareName'>$share</Data><Data Name='IpAddress'>192.168.1.10</Data>"
-        Write-EventXml -EventID 5140 -TimeStamp $ts -Data $data
-        $total++
+    # False positive: AV scan at 02:30 (even days)
+    if ($current_date.Day % 2 -eq 0) {
+        Set-Date -Date $current_date.Date.AddHours(2).AddMinutes(30) | Out-Null
+        Invoke-FalsePositive_AVScan
     }
 
-    # Normal: Explicit credential 4648 (2 per day)
-    foreach ($credHour in @(10, 14)) {
-        $ts = $current.AddHours($credHour).AddMinutes((Get-Random -Minimum 0 -Maximum 30))
-        $data = "<Data Name='SubjectUserName'>jdoe</Data><Data Name='SubjectDomainName'>CORP</Data><Data Name='TargetUserName'>jdoe</Data><Data Name='TargetServerName'>DC01</Data>"
-        Write-EventXml -EventID 4648 -TimeStamp $ts -Data $data
-        $total++
+    # False positive: Auth failure at 08:50 (multiples of 3)
+    if ($current_date.Day % 3 -eq 0) {
+        Set-Date -Date $current_date.Date.AddHours(8).AddMinutes(50) | Out-Null
+        Invoke-FalsePositive_AuthFail
     }
 
-    # False Positive: AV scan 4663 burst at 02:30 (even days)
-    if ($current.Day % 2 -eq 0) {
-        $tsBase = $current.AddHours(2).AddMinutes(30)
-        for ($f = 1; $f -le 100; $f++) {
-            $ts   = $tsBase.AddSeconds($f * 2)
-            $file = ($discoveredFiles | Get-Random).FullName
-            $data = "<Data Name='SubjectUserName'>SYSTEM</Data><Data Name='SubjectDomainName'>NT AUTHORITY</Data><Data Name='ObjectName'>$file</Data><Data Name='AccessMask'>0x1</Data>"
-            Write-EventXml -EventID 4663 -TimeStamp $ts -Data $data
-            $total++
-        }
-        Write-Host "  [+] AV scan false positive: 100 events"
-    }
-
-    # False Positive: Auth failure 4625 at 08:50 (multiples of 3)
-    if ($current.Day % 3 -eq 0) {
-        $tsBase = $current.AddHours(8).AddMinutes(50)
-        for ($a = 1; $a -le 20; $a++) {
-            $ts = $tsBase.AddSeconds($a * 15)
-            $data = "<Data Name='TargetUserName'>jdoe</Data><Data Name='TargetDomainName'>CORP</Data><Data Name='FailureReason'>%%2313</Data><Data Name='IpAddress'>192.168.1.50</Data>"
-            Write-EventXml -EventID 4625 -TimeStamp $ts -Data $data
-            $total++
-        }
-        Write-Host "  [+] Auth failure false positive: 20 events"
-    }
-
-    Write-Host "  [OK] Cumulative total: $total"
-    $current = $current.AddDays(1)
+    Write-Host "  Done: $count actions"
 }
 
-Write-Host "`n[DONE] Total events generated: $total"
+# [3] Restore system time
+Write-Host "`n[3] Restoring system time..."
+Set-Date -Date $REAL_TIME | Out-Null
+Write-Host "  Restored: $($REAL_TIME.ToString('yyyy-MM-dd HH:mm:ss'))"
 
-# Self-cleanup
-$selfPath = $MyInvocation.MyCommand.Path
+# [4] Cleanup all traces
+Write-Host "`n[4] Cleaning up traces..."
 
-# 1. Remove PowerShell history
-$histPath = (Get-PSReadLineOption).HistorySavePath
-if (Test-Path $histPath) {
-    $history = Get-Content $histPath | Where-Object { $_ -notmatch "Generate-user-EventLogs" }
-    $history | Set-Content $histPath -Force
+$download_path = "$env:USERPROFILE\Downloads"
+@(
+    "$download_path\Generate-user-EventLogs.ps1",
+    "$download_path\Generate-EventLogs-v4.ps1"
+) | ForEach-Object { Remove-Item $_ -Force -ErrorAction SilentlyContinue }
+Write-Host "  Download files deleted"
+
+Clear-History
+Remove-Item "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" -Force -ErrorAction SilentlyContinue
+Write-Host "  PowerShell history deleted"
+
+$edge_paths = @(
+    "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\History",
+    "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\History-journal",
+    "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache\Cache_Data",
+    "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Download Service\Files"
+)
+foreach ($path in $edge_paths) {
+    Remove-Item $path -Force -Recurse -ErrorAction SilentlyContinue
 }
+Write-Host "  Edge history deleted"
 
-# 2. Remove from recent items (LNK)
-$recentPath = "$env:APPDATA\Microsoft\Windows\Recent"
-Get-ChildItem $recentPath -Filter "*Generate-user-EventLogs*" -ErrorAction SilentlyContinue | Remove-Item -Force
+Remove-Item "C:\Windows\Prefetch\POWERSHELL*" -Force -ErrorAction SilentlyContinue
+Remove-Item "C:\Windows\Prefetch\GENERATE*"   -Force -ErrorAction SilentlyContinue
+Write-Host "  Prefetch deleted"
 
-# 3. Remove prefetch
-Get-ChildItem "C:\Windows\Prefetch" -Filter "*GENERATE*" -ErrorAction SilentlyContinue | Remove-Item -Force
+Start-Process "cmd.exe" -ArgumentList "/c ping 127.0.0.1 -n 2 > nul & del /f /q `"$($MyInvocation.MyCommand.Path)`"" -WindowStyle Hidden
+Write-Host "  Script self-deleted"
 
-# 4. Clear this script's own PowerShell event logs (EID 4103, 4104)
-wevtutil cl "Microsoft-Windows-PowerShell/Operational" 2>$null
-
-# 5. Delete the script file itself (via cmd to avoid lock)
-$delCmd = "cmd /c ping 127.0.0.1 -n 2 > nul & del /f /q `"$selfPath`""
-Start-Process "cmd.exe" -ArgumentList "/c ping 127.0.0.1 -n 2 > nul & del /f /q `"$selfPath`"" -WindowStyle Hidden
-
-Write-Host "[+] Self-cleanup initiated. Script will be deleted."
+Write-Host "`n======================================"
+Write-Host " All done!"
+Write-Host " Logs: May 14 ~ 21 generated"
+Write-Host " Traces: All cleaned"
+Write-Host " Ready for attack simulation"
+Write-Host "======================================"
