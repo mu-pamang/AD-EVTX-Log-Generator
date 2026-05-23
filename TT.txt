@@ -1,3 +1,13 @@
+# 1. PsExec 다운로드
+Invoke-WebRequest -Uri "https://download.sysinternals.com/files/PSTools.zip" -OutFile "$env:TEMP\PSTools.zip"
+Expand-Archive "$env:TEMP\PSTools.zip" -DestinationPath "$env:TEMP\PSTools" -Force
+
+# 2. SYSTEM 권한으로 PowerShell 실행
+& "$env:TEMP\PSTools\PsExec64.exe" -accepteula -s -i powershell.exe
+
+
+
+
 # 로컬 보안 정책에서 시간 변경 권한 부여
 secedit /export /cfg "$env:TEMP\sec.cfg" /quiet
 $cfg = Get-Content "$env:TEMP\sec.cfg"
