@@ -1,12 +1,6 @@
-# WIN10-CLIENT Log Generation Script v5
-# Audit policy via registry (no auditpol subcategory)
+# WIN10-CLIENT Log Generation Script v6
 
-# Enable audit policy via registry
-$auditKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
-Set-ItemProperty -Path $auditKey -Name "SCENoApplyLegacyAuditPolicy" -Value 0 -ErrorAction SilentlyContinue
-
-$polKey = "HKLM:\SECURITY\Policy\PolAdtEv"
-# Use secedit instead
+# Audit policy via secedit
 $seceditCfg = @"
 [Unicode]
 Unicode=yes
@@ -27,7 +21,9 @@ AuditAccountLogon=3
 $cfgPath = "$env:TEMP\audit.cfg"
 $seceditCfg | Set-Content $cfgPath -Encoding Unicode
 secedit /configure /db "$env:TEMP\audit.sdb" /cfg $cfgPath /quiet 2>$null
-Write-Host "[+] Audit policy configured via secedit"
+Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:TEMP\audit.sdb" -Force -ErrorAction SilentlyContinue
+Write-Host "[+] Audit policy configured"
 
 # Scan actual files
 $userProfile = $env:USERPROFILE
@@ -36,7 +32,8 @@ $scanPaths = @("$userProfile\Documents", "$userProfile\Desktop", "$userProfile\D
 $discoveredFiles = @()
 foreach ($p in $scanPaths) {
     if (Test-Path $p) {
-        $discoveredFiles += Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue
+        $discoveredFiles += Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notlike "*Generate-user-EventLogs*" }
     }
 }
 
@@ -60,7 +57,7 @@ function Write-EventXml {
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
 }
 
-# Date loop Jan 14~21
+# Date loop 2026-05-14 ~ 2026-05-22
 $startDate = [datetime]"2026-05-14"
 $endDate   = [datetime]"2026-05-22"
 $current   = $startDate
@@ -143,3 +140,29 @@ while ($current -le $endDate) {
 }
 
 Write-Host "`n[DONE] Total events generated: $total"
+
+# Self-cleanup
+$selfPath = $MyInvocation.MyCommand.Path
+
+# 1. Remove PowerShell history
+$histPath = (Get-PSReadLineOption).HistorySavePath
+if (Test-Path $histPath) {
+    $history = Get-Content $histPath | Where-Object { $_ -notmatch "Generate-user-EventLogs" }
+    $history | Set-Content $histPath -Force
+}
+
+# 2. Remove from recent items (LNK)
+$recentPath = "$env:APPDATA\Microsoft\Windows\Recent"
+Get-ChildItem $recentPath -Filter "*Generate-user-EventLogs*" -ErrorAction SilentlyContinue | Remove-Item -Force
+
+# 3. Remove prefetch
+Get-ChildItem "C:\Windows\Prefetch" -Filter "*GENERATE*" -ErrorAction SilentlyContinue | Remove-Item -Force
+
+# 4. Clear this script's own PowerShell event logs (EID 4103, 4104)
+wevtutil cl "Microsoft-Windows-PowerShell/Operational" 2>$null
+
+# 5. Delete the script file itself (via cmd to avoid lock)
+$delCmd = "cmd /c ping 127.0.0.1 -n 2 > nul & del /f /q `"$selfPath`""
+Start-Process "cmd.exe" -ArgumentList "/c ping 127.0.0.1 -n 2 > nul & del /f /q `"$selfPath`"" -WindowStyle Hidden
+
+Write-Host "[+] Self-cleanup initiated. Script will be deleted."
