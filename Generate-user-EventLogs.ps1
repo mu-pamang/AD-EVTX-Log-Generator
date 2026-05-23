@@ -61,8 +61,8 @@ function Write-EventXml {
 }
 
 # Date loop Jan 14~21
-$startDate = [datetime]"2025-01-14"
-$endDate   = [datetime]"2025-01-21"
+$startDate = [datetime]"2026-05-14"
+$endDate   = [datetime]"2026-05-22"
 $current   = $startDate
 $total     = 0
 
